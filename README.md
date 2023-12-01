@@ -11,13 +11,7 @@ This extension provides a visual representation of the dependency graph of your 
 
 ## How To Use
 
-Right-click on any TypeScript(.ts) / Typescript React JSX(.tsx) files and choose Open Dependency Graph option.
-
-## Release Notes
-
-### 0.0.1
-
-Initial release of TypeScript Dependency Graph Extension.
+Right-click on any TypeScript(.ts) / Typescript React JSX(.tsx) files and choose `View Dependency Graph` option.
 
 ## Upcoming features
 

@@ -2,7 +2,7 @@
   "name": "dependency-graph-viewer",
   "displayName": "Dependency Graph Viewer",
   "description": "Visualize the dependencies in your TypeScript/TypeScript React JSX project",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "license": "MIT",
   "icon": "images/icon.png",
   "publisher": "Antarpreet",
