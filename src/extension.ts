@@ -17,6 +17,7 @@ const defaultState: any = {
 	classes: [],
 	functions: [],
 	filename: '',
+	filePath: '',
 	files: {},
 	colors: {
 		imports: '#c586b6',
@@ -37,7 +38,7 @@ let state: any = JSON.parse(JSON.stringify(defaultState));
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
@@ -47,7 +48,28 @@ export function activate(context: vscode.ExtensionContext) {
 	// Now provide the implementation of the command with registerCommand
 	// The commandId parameter must match the command field in package.json
 	let disposable = vscode.commands.registerCommand('dependency-graph-viewer.openDependencyGraph', async (file: vscode.Uri) => {
-		await openFileDependencyGraph(context, file);
+		await vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: `Opening dependency graph for ${file.path.split('/').pop()}`,
+			cancellable: false
+		}, async (progress) => {
+			try {
+				const workspaceFolders = vscode.workspace.workspaceFolders;
+				if (workspaceFolders) {
+					const workspaceFolder = workspaceFolders[0]; // Get the first workspace folder
+					const pattern = new vscode.RelativePattern(workspaceFolder, '**/*.{js,jsx,ts,tsx}');
+					const excludePattern = new vscode.RelativePattern(workspaceFolder, '**/node_modules/**'); // Exclude pattern for node_modules
+					const files = await vscode.workspace.findFiles(pattern, excludePattern, 1000); // Adjust the maximum number of files as needed
+
+					// Open all TypeScript files in the workspace
+					await Promise.all(files.map(file => vscode.workspace.openTextDocument(file)));
+				}
+
+				await openFileDependencyGraph(context, file);
+			} catch (error) {
+				console.error(error);
+			}
+		});
 	});
 
 	context.subscriptions.push(disposable);
@@ -63,7 +85,8 @@ async function openFileDependencyGraph(context: vscode.ExtensionContext, file?: 
 		// clear state
 		state = {
 			...JSON.parse(JSON.stringify(defaultState)),
-			files: state.files
+			files: state.files,
+			filePath: file?.fsPath
 		};
 		// get file content
 		let content: Uint8Array;
@@ -93,30 +116,32 @@ async function parseFile(file: vscode.Uri, contentString: string) {
 	switch (language) {
 		case 'typescript':
 		case 'typescriptreact':
-			await parseTsFile(file, contentString);
+		case 'javascript':
+		case 'javascriptreact':
+			await parseJsTsFile(file, contentString);
 			break;
 		default:
 			vscode.window.showWarningMessage('File type not supported');
 			return;
 	}
 
-	console.log('Imports:', state.imports);
-	console.log('Exports:', state.exports);
-	console.log('Classes:', state.classes);
-	console.log('Functions:', state.functions);
+	// console.log('Imports:', state.imports);
+	// console.log('Exports:', state.exports);
+	// console.log('Classes:', state.classes);
+	// console.log('Functions:', state.functions);
 }
 
-async function parseTsFile(file: vscode.Uri, contentString: string) {
+async function parseJsTsFile(file: vscode.Uri, contentString: string) {
 	// Parse the contentString to a SourceFile object
 	const sourceFile = ts.createSourceFile('temp.ts', contentString, ts.ScriptTarget.Latest, true);
 
 	// Walk the AST (Abstract Syntax Tree)
 	function visit(node: ts.Node) {
-		if (ts.isImportDeclaration(node)) {
+		if (ts.isImportDeclaration(node) || (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require')) {
 			// if import declaration
-			const moduleName = node.moduleSpecifier.getText(sourceFile).replace(/['"`]/g, '');
-			const importedItems = node.importClause?.namedBindings
-				? node.importClause.namedBindings.getText(sourceFile)
+			const moduleName = (node as any).moduleSpecifier?.getText(sourceFile).replace(/['"`]/g, '') ?? (node as any).arguments?.[0]?.getText(sourceFile).replace(/['"`]/g, '');
+			const importedItems = (node as any).importClause?.namedBindings
+				? (node as any).importClause.namedBindings.getText(sourceFile)
 				: '*';
 			// get the directory of the current file
 			const fileDir = path.dirname(file.fsPath);
@@ -141,13 +166,29 @@ async function parseTsFile(file: vscode.Uri, contentString: string) {
 							absolutePath = path.resolve(currentDir, 'node_modules', `${moduleName}.d.ts`);
 						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules', `${moduleName}/dist/index.d.ts`))) {
 							absolutePath = path.resolve(currentDir, 'node_modules', `${moduleName}/dist/index.d.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules', `${moduleName}/lib/index.d.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules', `${moduleName}/lib/index.d.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules', `${moduleName}/index.d.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules', `${moduleName}/index.d.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules', `${moduleName}/src/index.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules', `${moduleName}/src/index.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules', `${moduleName}/src/index.tsx`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules', `${moduleName}/src/index.tsx`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules/@types', `${moduleName}.d.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules/@types', `${moduleName}.d.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules/@types', `${moduleName}/dist/index.d.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules/@types', `${moduleName}/dist/index.d.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules/@types', `${moduleName}/lib/index.d.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules/@types', `${moduleName}/lib/index.d.ts`);
+						} else if (fs.existsSync(path.resolve(currentDir, 'node_modules/@types', `${moduleName}/index.d.ts`))) {
+							absolutePath = path.resolve(currentDir, 'node_modules/@types', `${moduleName}/index.d.ts`);
 						}
 						if (absolutePath) {
 							break;
 						}
 						currentDir = path.dirname(currentDir); // go up one directory
 					}
-			
+
 					if (!absolutePath) {
 						console.log(`Could not resolve module: ${moduleName}`);
 					}
@@ -155,7 +196,8 @@ async function parseTsFile(file: vscode.Uri, contentString: string) {
 			}
 			state.imports.push({ moduleName, importedItems, absolutePath });
 		}
-		if (ts.isExportDeclaration(node) || ts.isExportAssignment(node) || ((ts.getCombinedModifierFlags(node as any) & (ts.ModifierFlags.Export | ts.ModifierFlags.Default)) !== 0)) {
+		if (ts.isExportDeclaration(node) || ts.isExportAssignment(node) || ((ts.getCombinedModifierFlags(node as any) & (ts.ModifierFlags.Export | ts.ModifierFlags.Default)) !== 0) ||
+			(ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) && node.left.expression.getText(sourceFile) === 'module' && node.left.name.getText(sourceFile) === 'exports')) {
 			// if export declaration
 			const exportName = (node as any).name?.getText(sourceFile);
 			const exportBody = node.getText(sourceFile);
@@ -167,7 +209,7 @@ async function parseTsFile(file: vscode.Uri, contentString: string) {
 			// if class declaration
 			const className = node.name?.getText(sourceFile);
 			const classBody = node.members
-				.filter(member => ts.isMethodDeclaration(member) || ts.isGetAccessor(member) || ts.isSetAccessor(member) || ts.isConstructorDeclaration(member))
+				.filter(member => ts.isMethodDeclaration(member) || ts.isGetAccessor(member) || ts.isSetAccessor(member) || ts.isConstructorDeclaration(member) || (ts.isPropertyDeclaration(member) && member.initializer && ts.isArrowFunction(member.initializer)))
 				.map(member => {
 					const functionName = ts.isConstructorDeclaration(member) ? 'constructor' : member.name?.getText(sourceFile);
 					const functionBody = (member as any).body?.getText(sourceFile);
@@ -370,10 +412,11 @@ async function getGitStatus() {
 
 function generateFileGraph(repository?: Repository) {
 	// create a new tree layout
-	console.log('repository', repository);
+	// console.log('repository', repository);
 	const root = d3.hierarchy({
 		name: state.filename,
 		badge: true,
+		path: state.filePath,
 		category: SVGNodeCategory.root,
 		children: [
 			{
@@ -403,22 +446,21 @@ function generateFileGraph(repository?: Repository) {
 				category: SVGNodeCategory.category,
 				fillColor: state.colors.exports,
 				children: state.exports.map((item: any) => {
+					const groupedReferences = item.references as Map<string, vscode.Location[]>;
 					return {
 						name: item.name,
 						body: item.body,
 						category: SVGNodeCategory.property,
 						fillColor: state.colors.exports,
-						children: item.references?.map((reference: vscode.Location) => {
-							const uri = reference.uri;
-							const path = uri.path;
-							const filename = path.split('/').pop();
+						children: Array.from(groupedReferences.keys())?.map((key: string) => {
+							const references = groupedReferences.get(key);
 							return {
-								name: `${filename} (${reference.range.start.line + 1}:${reference.range.start.character + 1})`,
+								name: `${key.split('\\').pop()} (${references.length})`,
 								badge: true,
-								uri,
-								range: reference.range,
+								path: key,
 								category: SVGNodeCategory.file,
-								fillColor: state.colors.file
+								fillColor: state.colors.file,
+								references
 							};
 						}) || []
 					};
@@ -552,15 +594,23 @@ function generateFileGraph(repository?: Repository) {
 }
 
 async function openDescriptionPanel(d: any) {
-	console.log(d);
+	// console.log(d);
 	switch (d.category) {
 		case SVGNodeCategory.class:
 		case SVGNodeCategory.file:
-			if (d.path) {
-				const uri = vscode.Uri.file(d.path);
+		case SVGNodeCategory.root:
+			const path = d.path || d.uri?.path;
+			if (path) {
+				const uri = vscode.Uri.file(path);
+
+				const start = new vscode.Position(d.range?.[0]?.line ?? 0, d.range?.[0]?.character ?? 0);
+				const end = new vscode.Position(d.range?.[1]?.line ?? 0, d.range?.[1]?.character ?? 0);
+				const selection = new vscode.Selection(start, end);
 
 				vscode.workspace.openTextDocument(uri).then(document => {
-					vscode.window.showTextDocument(document);
+					vscode.window.showTextDocument(document, {
+						selection
+					});
 				});
 			}
 			break;
@@ -568,7 +618,6 @@ async function openDescriptionPanel(d: any) {
 		case SVGNodeCategory.property:
 		case SVGNodeCategory.reference:
 		case SVGNodeCategory.category:
-		case SVGNodeCategory.root:
 		default:
 			break;
 	}
@@ -598,8 +647,8 @@ async function addExportReferences(file: vscode.Uri, contentString: string) {
 		const end = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name) + item.name.length);
 		// const selection = new vscode.Selection(start, end);
 		// editor.selection = selection;
-		console.log(`Start position: Line ${start.line + 1}, Character ${start.character + 1}`);
-		console.log(`End position: Line ${end.line + 1}, Character ${end.character + 1}`);
+		// console.log(`Start position: Line ${start.line + 1}, Character ${start.character + 1}`);
+		// console.log(`End position: Line ${end.line + 1}, Character ${end.character + 1}`);
 
 		const uri = vscode.Uri.file(file.path);
 		const position = new vscode.Position(start.line, start.character);
@@ -608,12 +657,21 @@ async function addExportReferences(file: vscode.Uri, contentString: string) {
 }
 
 async function findReferences(uri: vscode.Uri, position: vscode.Position) {
-	const document = await vscode.workspace.openTextDocument(uri);
-	const references = await vscode.commands.executeCommand<vscode.Location[]>(
-		'vscode.executeReferenceProvider',
-		document.uri,
-		position
-	);
-	console.log('references', references);
-	return references;
+    const document = await vscode.workspace.openTextDocument(uri);
+    const references = await vscode.commands.executeCommand<vscode.Location[]>(
+        'vscode.executeReferenceProvider',
+        document.uri,
+        position
+    );
+
+    const groupedReferences = new Map<string, vscode.Location[]>();
+    for (const reference of references) {
+        const fileUri = reference.uri.fsPath.toString();
+        const fileReferences = groupedReferences.get(fileUri) || [];
+        fileReferences.push(reference);
+        groupedReferences.set(fileUri, fileReferences);
+    }
+
+    // console.log('groupedReferences', groupedReferences);
+    return groupedReferences;
 }
