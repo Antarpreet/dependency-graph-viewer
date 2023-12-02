@@ -2,6 +2,10 @@
 
 All notable changes to the "dependency-graph-viewer" extension will be documented in this file.
 
+### 0.0.4
+
+Updated documentation.
+
 ### 0.0.3
 
 - Added javascript and javascript JSX support
