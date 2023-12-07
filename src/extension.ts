@@ -9,6 +9,11 @@ import {
 	API, Repository, Status, SVGNodeCategory
 } from './models/models';
 import path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+
 
 const defaultState: any = {
 	graphHTML: '',
@@ -57,7 +62,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				const workspaceFolders = vscode.workspace.workspaceFolders;
 				if (workspaceFolders) {
 					const workspaceFolder = workspaceFolders[0]; // Get the first workspace folder
-					const pattern = new vscode.RelativePattern(workspaceFolder, '**/*.{js,jsx,ts,tsx}');
+					const pattern = new vscode.RelativePattern(workspaceFolder, '**/*.{js,jsx,ts,tsx,py}');
 					const excludePattern = new vscode.RelativePattern(workspaceFolder, '**/node_modules/**'); // Exclude pattern for node_modules
 					const files = await vscode.workspace.findFiles(pattern, excludePattern, 1000); // Adjust the maximum number of files as needed
 
@@ -97,9 +102,11 @@ async function openFileDependencyGraph(context: vscode.ExtensionContext, file?: 
 			state.files[file.path] = content;
 		}
 		const contentString = Buffer.from(content).toString();
+		const document = await vscode.workspace.openTextDocument(file);
+		const language = document.languageId;
 
-		await parseFile(file, contentString);
-		await addExportReferences(file, contentString);
+		await parseFile(file, contentString, language);
+		await addExportReferences(file, contentString, language);
 		// parse filename from path
 		state.filename = file.path.split('/').pop();
 
@@ -109,9 +116,7 @@ async function openFileDependencyGraph(context: vscode.ExtensionContext, file?: 
 	}
 }
 
-async function parseFile(file: vscode.Uri, contentString: string) {
-	const document = await vscode.workspace.openTextDocument(file);
-	const language = document.languageId;
+async function parseFile(file: vscode.Uri, contentString: string, language: string) {
 
 	switch (language) {
 		case 'typescript':
@@ -120,15 +125,18 @@ async function parseFile(file: vscode.Uri, contentString: string) {
 		case 'javascriptreact':
 			await parseJsTsFile(file, contentString);
 			break;
+		case 'python':
+			await parsePythonFile(file);
+			break;
 		default:
 			vscode.window.showWarningMessage('File type not supported');
 			return;
 	}
 
-	// console.log('Imports:', state.imports);
-	// console.log('Exports:', state.exports);
-	// console.log('Classes:', state.classes);
-	// console.log('Functions:', state.functions);
+	console.log('Imports:', state.imports);
+	console.log('Exports:', state.exports);
+	console.log('Classes:', state.classes);
+	console.log('Functions:', state.functions);
 }
 
 async function parseJsTsFile(file: vscode.Uri, contentString: string) {
@@ -236,6 +244,53 @@ async function parseJsTsFile(file: vscode.Uri, contentString: string) {
 	}
 
 	visit(sourceFile);
+}
+
+async function parsePythonFile(file: vscode.Uri) {
+	const parseScriptPath = path.resolve(__dirname, 'parse.py');
+	const { stdout } = await execAsync(`python3 "${parseScriptPath}" "${file.fsPath}"`);
+	const ast = JSON.parse(stdout);
+	console.log(ast);
+
+	// Walk the AST (Abstract Syntax Tree)
+	function visit(node: any) {
+		if (node.FunctionDef) {
+			const functionName = node.FunctionDef.name;
+			const functionBody = node.FunctionDef.body;
+			state.functions.push({ name: functionName, body: functionBody });
+		}
+		if (node.ClassDef) {
+			const className = node.ClassDef.name;
+			let classBody = node.ClassDef.body.filter((item: any) => item.FunctionDef)
+				.map((item: any) => {
+					const functionName = item.FunctionDef.name;
+					const functionBody = item.FunctionDef.body;
+					return { name: functionName, body: functionBody };
+				});;
+			state.classes.push({ name: className, body: classBody });
+		}
+		if (node.Import || node.ImportFrom) {
+			const moduleName = node.Import ? (node.Import.module ?? 'module') : node.ImportFrom.module;
+			const importedItems = (node.Import ? node.Import.names : node.ImportFrom.names).map((item: any) => item.alias.name).toString();
+			state.imports.push({ moduleName, importedItems });
+		}
+		for (let key in node) {
+			if (node[key] && typeof node[key] === 'object') {
+				visit(node[key]);
+			}
+		}
+	}
+
+	visit(ast);
+
+	let allModuleImports = state.imports.filter((item: any) => item.moduleName === 'module');
+	let moduleImports = state.imports.filter((item: any) => item.moduleName !== 'module');
+	let combinedImport = allModuleImports.reduce((acc: any, curr: any) => {
+		acc.importedItems = acc.importedItems.concat(',' + curr.importedItems);
+		return acc;
+	}, { moduleName: 'module', importedItems: '' });
+
+	state.imports = [combinedImport, ...moduleImports];
 }
 
 async function createWebView(context: vscode.ExtensionContext, file?: vscode.Uri) {
@@ -433,7 +488,7 @@ function generateFileGraph(repository?: Repository) {
 						children: item.importedItems === '*' ? [] : item.importedItems.replace(/[{} ]/g, '').split(',').filter(i => i.trim().length > 0).map((name: string) => {
 							return {
 								name: name.trim(),
-								path: item.absolutePath, // fix this to go to position by adding range from references for each import and filtering by moduleName
+								path: item.absolutePath,
 								category: SVGNodeCategory.property,
 								fillColor: state.colors.property
 							};
@@ -491,11 +546,23 @@ function generateFileGraph(repository?: Repository) {
 				category: SVGNodeCategory.category,
 				fillColor: state.colors.functions,
 				children: state.functions.map((item: any) => {
+					const groupedReferences = item.references as Map<string, vscode.Location[]>;
 					return {
 						name: item.name,
 						category: SVGNodeCategory.function,
 						fillColor: state.colors.functions,
-						body: item.body
+						body: item.body,
+						children: Array.from(groupedReferences?.keys() ?? [])?.map((key: string) => {
+							const references = groupedReferences.get(key);
+							return {
+								name: `${key.split('\\').pop()} (${references.length})`,
+								badge: true,
+								path: key,
+								category: SVGNodeCategory.file,
+								fillColor: state.colors.file,
+								references
+							};
+						}) || []
 					};
 				})
 			}
@@ -639,39 +706,65 @@ async function openDescriptionPanel(d: any) {
 	// `;
 }
 
-async function addExportReferences(file: vscode.Uri, contentString: string) {
-	for (const item of state.exports) {
-		const lines = contentString.split(/\r?\n/);
-		const lineIndex = item.name ? lines.findIndex(i => i.includes(item.name) && i.includes('export')) : -1;
-		const start = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name));
-		const end = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name) + item.name.length);
-		// const selection = new vscode.Selection(start, end);
-		// editor.selection = selection;
-		// console.log(`Start position: Line ${start.line + 1}, Character ${start.character + 1}`);
-		// console.log(`End position: Line ${end.line + 1}, Character ${end.character + 1}`);
+async function addExportReferences(file: vscode.Uri, contentString: string, language: string) {
+	switch (language) {
+		case 'typescript':
+		case 'typescriptreact':
+		case 'javascript':
+		case 'javascriptreact':
+			for (const item of state.exports) {
+				const lines = contentString.split(/\r?\n/);
+				const lineIndex = item.name ? lines.findIndex(i => i.includes(item.name) && i.includes('export')) : -1;
+				const start = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name));
+				const end = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name) + item.name.length);
+				// const selection = new vscode.Selection(start, end);
+				// editor.selection = selection;
+				// console.log(`Start position: Line ${start.line + 1}, Character ${start.character + 1}`);
+				// console.log(`End position: Line ${end.line + 1}, Character ${end.character + 1}`);
 
-		const uri = vscode.Uri.file(file.path);
-		const position = new vscode.Position(start.line, start.character);
-		item.references = await findReferences(uri, position);
+				const uri = vscode.Uri.file(file.path);
+				const position = new vscode.Position(start.line, start.character);
+				item.references = await findReferences(uri, position);
+			}
+			break;
+		case 'python':
+			for (const item of state.functions) {
+				const lines = contentString.split(/\r?\n/);
+				const lineIndex = item.name ? lines.findIndex(i => i.includes(item.name)) : -1;
+				const start = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name));
+				const end = new vscode.Position(lineIndex, lines[lineIndex].indexOf(item.name) + item.name.length);
+				// const selection = new vscode.Selection(start, end);
+				// editor.selection = selection;
+				// console.log(`Start position: Line ${start.line + 1}, Character ${start.character + 1}`);
+				// console.log(`End position: Line ${end.line + 1}, Character ${end.character + 1}`);
+
+				const uri = vscode.Uri.file(file.path);
+				const position = new vscode.Position(start.line, start.character);
+				item.references = await findReferences(uri, position);
+			}
+			break;
+		default:
+			vscode.window.showWarningMessage('File type not supported');
+			return;
 	}
 }
 
 async function findReferences(uri: vscode.Uri, position: vscode.Position) {
-    const document = await vscode.workspace.openTextDocument(uri);
-    const references = await vscode.commands.executeCommand<vscode.Location[]>(
-        'vscode.executeReferenceProvider',
-        document.uri,
-        position
-    );
+	const document = await vscode.workspace.openTextDocument(uri);
+	const references = await vscode.commands.executeCommand<vscode.Location[]>(
+		'vscode.executeReferenceProvider',
+		document.uri,
+		position
+	);
 
-    const groupedReferences = new Map<string, vscode.Location[]>();
-    for (const reference of references) {
-        const fileUri = reference.uri.fsPath.toString();
-        const fileReferences = groupedReferences.get(fileUri) || [];
-        fileReferences.push(reference);
-        groupedReferences.set(fileUri, fileReferences);
-    }
+	const groupedReferences = new Map<string, vscode.Location[]>();
+	for (const reference of references) {
+		const fileUri = reference.uri.fsPath.toString();
+		const fileReferences = groupedReferences.get(fileUri) || [];
+		fileReferences.push(reference);
+		groupedReferences.set(fileUri, fileReferences);
+	}
 
-    // console.log('groupedReferences', groupedReferences);
-    return groupedReferences;
+	// console.log('groupedReferences', groupedReferences);
+	return groupedReferences;
 }

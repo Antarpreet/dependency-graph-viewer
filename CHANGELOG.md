@@ -2,9 +2,25 @@
 
 All notable changes to the "dependency-graph-viewer" extension will be documented in this file.
 
+### 0.0.8
+
+- Bug Fixes.
+
+### 0.0.7
+
+- Bug Fixes.
+
+### 0.0.6
+
+- Updated documentation.
+
+### 0.0.5
+
+- Added python support with references to all functions in a file.
+
 ### 0.0.4
 
-Updated documentation.
+- Updated documentation.
 
 ### 0.0.3
 
@@ -17,8 +33,8 @@ added notification when loading
 
 ### 0.0.2
 
-Updated documentation.
+- Updated documentation.
 
 ### 0.0.1
 
-Initial release of Dependency Graph Extension.
+- Initial release of Dependency Graph Extension.

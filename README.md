@@ -1,6 +1,8 @@
 # Dependency Graph Extension (Alpha) for Visual Studio Code
 
-This extension provides a visual representation of the dependency graph of your Javascript/Typescript projects in Visual Studio Code.
+This extension provides a visual representation of the dependency graph of your projects in Visual Studio Code.
+
+**Supported Languages**: Javascript(.js/.jsx), Typescript(.ts/.tsx), Python(.py)
 
 ## Features
 
@@ -11,12 +13,12 @@ This extension provides a visual representation of the dependency graph of your 
 
 ## How To Use
 
-Right-click on any Javascript(.js/.jsx)/Typescript(.ts/.tsx) files and choose `View Dependency Graph` option.
+Right-click on any file in the vscode explorer of supported language type and choose `View Dependency Graph` option.
 
 ## Upcoming features
 
 - Make graph more interactive by providing detailed info about the node based on the type of entity (class, function, file, property etc.)
-- Add support for other languages (Python etc.)
 - Add right-click option for directories to display file-level dependency graph
+- Add support for other languages
 
 **Enjoy!**
